@@ -1,12 +1,11 @@
 /**
- * Orion Signaling Server v1.0
+ * Orion Signaling Server v1.1
  *
- * Servidor WebSocket minimalista para señalización P2P.
- * NO almacena mensajes - solo facilita el intercambio de IPs entre peers.
- *
- * Los mensajes van directo P2P después de la conexión inicial.
+ * Servidor WebSocket para señalización P2P.
+ * NO almacena mensajes - solo facilita el intercambio entre peers.
  */
 
+const http = require('http');
 const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 3000;
@@ -15,15 +14,27 @@ const PORT = process.env.PORT || 3000;
 const peers = new Map();
 
 // Mensajes pendientes: Map<destinoPeerId, Array<mensaje>>
-// Solo se guardan temporalmente hasta que el peer se conecte
 const pendingMessages = new Map();
 
 // Limpiar mensajes pendientes después de 24 horas
 const MESSAGE_TTL = 24 * 60 * 60 * 1000;
 
-const wss = new WebSocket.Server({ port: PORT });
+// Crear servidor HTTP para que Railway pueda hacer health checks
+const server = http.createServer((req, res) => {
+    // Health check endpoint
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+        status: 'ok',
+        service: 'Orion Signaling Server',
+        peers: peers.size,
+        uptime: process.uptime()
+    }));
+});
 
-console.log(`🚀 Orion Signaling Server iniciado en puerto ${PORT}`);
+// WebSocket server sobre HTTP
+const wss = new WebSocket.Server({ server });
+
+console.log(`🚀 Orion Signaling Server v1.1 iniciando en puerto ${PORT}...`);
 
 wss.on('connection', (ws, req) => {
     const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress;
@@ -106,7 +117,7 @@ wss.on('connection', (ws, req) => {
                     break;
 
                 case 'broadcast':
-                    // Mensaje para todos los peers (sincronización de mensajes de emergencia)
+                    // Mensaje para todos los peers
                     broadcast(peerId, {
                         type: 'broadcast',
                         from: peerId,
@@ -117,7 +128,6 @@ wss.on('connection', (ws, req) => {
 
                 case 'sync_request':
                     // Solicitar sincronización de mensajes
-                    // Reenviar a todos los peers para que respondan con sus mensajes
                     broadcast(peerId, {
                         type: 'sync_request',
                         from: peerId,
@@ -205,10 +215,15 @@ setInterval(() => {
     console.log(`📊 Stats: ${peers.size} peers conectados, ${pendingMessages.size} con mensajes pendientes`);
 }, 5 * 60 * 1000);
 
+// Iniciar servidor
+server.listen(PORT, () => {
+    console.log(`✅ Servidor HTTP+WebSocket escuchando en puerto ${PORT}`);
+});
+
 // Graceful shutdown
 process.on('SIGTERM', () => {
     console.log('🛑 Cerrando servidor...');
-    wss.close(() => {
+    server.close(() => {
         console.log('✅ Servidor cerrado');
         process.exit(0);
     });
